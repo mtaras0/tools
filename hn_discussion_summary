@@ -1,0 +1,114 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>HN AI Summarizer</title>
+    <style>
+        body { font-family: sans-serif; max-width: 800px; margin: 20px auto; padding: 0 15px; line-height: 1.6; color: #222; }
+        .box { background: #f4f4f4; padding: 20px; border-radius: 8px; margin-bottom: 20px; }
+        input { width: 100%; padding: 10px; margin: 8px 0 15px 0; border: 1px solid #ccc; border-radius: 4px; box-sizing: border-box; }
+        button { padding: 12px 24px; cursor: pointer; background: #ff6600; color: white; border: none; border-radius: 4px; font-weight: bold; width: 100%; }
+        button:disabled { background: #ccc; }
+        #status { margin-top: 10px; font-size: 0.9em; font-style: italic; color: #666; }
+        #summary { white-space: pre-wrap; margin-top: 20px; padding: 20px; border-top: 2px solid #ff6600; font-size: 1.1em; }
+        label { font-weight: bold; font-size: 0.9em; }
+    </style>
+</head>
+<body>
+
+    <h2>Hacker News Discussion Summarizer</h2>
+    
+    <div class="box">
+        <label for="geminiKey">Gemini API Key</label>
+        <input type="password" id="geminiKey" placeholder="Enter your Google AI Studio key...">
+
+        <label for="hnUrl">Hacker News URL</label>
+        <input type="text" id="hnUrl" placeholder="https://news.ycombinator.com/item?id=42586616">
+        
+        <button id="runBtn" onclick="generateSummary()">Generate Summary</button>
+        <div id="status"></div>
+    </div>
+
+    <div id="summary"></div>
+
+    <script>
+        // API Key persistence
+        const keyField = document.getElementById('geminiKey');
+        const savedKey = localStorage.getItem('hn_gemini_key');
+        if (savedKey) keyField.value = savedKey;
+        keyField.addEventListener('input', () => localStorage.setItem('hn_gemini_key', keyField.value));
+
+        async function generateSummary() {
+            const url = document.getElementById('hnUrl').value;
+            const key = keyField.value;
+            const status = document.getElementById('status');
+            const summaryDiv = document.getElementById('summary');
+            const btn = document.getElementById('runBtn');
+
+            const idMatch = url.match(/id=(\d+)/);
+            if (!idMatch) return alert("Please provide a valid HN URL.");
+            if (!key) return alert("Please enter your Gemini API key.");
+
+            btn.disabled = true;
+            summaryDiv.innerText = "";
+            status.innerText = "Fetching discussion from Algolia...";
+
+            try {
+                // 1. Fetch data from Algolia
+                const res = await fetch(`https://hn.algolia.com/api/v1/items/${idMatch[1]}`);
+                const data = await res.json();
+
+                // 2. Build hierarchical text string
+                let discussionContext = `Topic: ${data.title}\nURL: ${data.url || 'Self Post'}\n\n`;
+                
+                function formatComments(comments, prefix) {
+                    let text = "";
+                    comments.forEach((c, i) => {
+                        const num = prefix ? `${prefix}.${i + 1}` : `${i + 1}`;
+                        text += `#${num} ${c.author || '[deleted]'}:\n${clean(c.text || '[no text]')}\n\n`;
+                        if (c.children) text += formatComments(c.children, num);
+                    });
+                    return text;
+                }
+
+                discussionContext += formatComments(data.children || [], "");
+
+                // 3. Send to Gemini
+                status.innerText = "Analyzing with Gemini-3-Flash...";
+                
+                const prompt = `Write a short summary that extracts main points commenters made on the topic, paying attention to discussion depth and back and forth to indicate "agreed with" points and contested ones, both from the original material and comments.\n\nDISCUSSION DATA:\n${discussionContext}`;
+
+                const geminiRes = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-3-flash-preview:generateContent?key=${key}`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        contents: [{ parts: [{ text: prompt }] }]
+                    })
+                });
+
+                const geminiData = await geminiRes.json();
+                
+                if (geminiData.candidates && geminiData.candidates[0].content.parts[0].text) {
+                    summaryDiv.innerText = geminiData.candidates[0].content.parts[0].text;
+                    status.innerText = "Summary complete.";
+                } else {
+                    throw new Error("Invalid API response. Check your key or quota.");
+                }
+
+            } catch (err) {
+                console.error(err);
+                status.innerText = "Error: " + err.message;
+            } finally {
+                btn.disabled = false;
+            }
+        }
+
+        function clean(html) {
+            const div = document.createElement("div");
+            div.innerHTML = html;
+            return div.textContent || div.innerText || "";
+        }
+    </script>
+</body>
+</html>
