@@ -1,0 +1,104 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>My HTML Tools</title>
+    <style>
+        /* Minimal CSS as requested */
+        body {
+            font-family: sans-serif;
+            font-size: 1.5rem; /* Bigger text */
+            line-height: 1.6;
+            max-width: 800px;
+            margin: 2rem auto;
+            padding: 0 1rem;
+        }
+        a { text-decoration: none; color: #0074cc; }
+        a:hover { text-decoration: underline; }
+        ul { list-style: none; padding: 0; }
+        li { margin-bottom: 0.5rem; }
+
+        /* Dark Mode Support */
+        @media (prefers-color-scheme: dark) {
+            body {
+                background-color: #121212;
+                color: #e0e0e0;
+            }
+            a { color: #8ab4f8; }
+        }
+    </style>
+</head>
+<body>
+
+    <h1>My HTML Tools</h1>
+    <ul id="tool-list">
+        <li><i>Loading tools...</i></li>
+    </ul>
+
+    <script>
+        // CONFIGURATION: If auto-detection fails, fill these in manually.
+        // Example: USER = 'your-username', REPO = 'your-repo-name'
+        let USER = '';
+        let REPO = '';
+
+        async function fetchTools() {
+            const list = document.getElementById('tool-list');
+
+            // 1. Auto-detect GitHub username and repo from the URL
+            if (!USER || !REPO) {
+                const pathParts = window.location.pathname.split('/').filter(p => p);
+                const hostParts = window.location.hostname.split('.');
+
+                if (hostParts[1] === 'github' && hostParts[2] === 'io') {
+                    // Hosted on GitHub Pages (user.github.io/repo)
+                    USER = hostParts[0];
+                    REPO = pathParts[0] || USER + '.github.io'; // Handle root user sites
+                } else if (window.location.hostname === 'localhost') {
+                    // Local testing: warn the user
+                    list.innerHTML = '<li>⚠️ Cannot auto-detect repo on localhost.<br>Please edit the USER and REPO variables in the script tag.</li>';
+                    return;
+                }
+            }
+
+            // 2. Call GitHub API to get file list
+            const apiUrl = `https://api.github.com/repos/${USER}/${REPO}/contents/`;
+            
+            try {
+                const response = await fetch(apiUrl);
+                if (!response.ok) throw new Error(`GitHub API Error: ${response.status}`);
+                
+                const data = await response.json();
+                
+                // 3. Filter for HTML files (excluding this index.html)
+                const tools = data.filter(file => 
+                    file.name.endsWith('.html') && 
+                    file.name.toLowerCase() !== 'index.html'
+                );
+
+                // 4. Generate Links
+                if (tools.length === 0) {
+                    list.innerHTML = '<li>No other HTML files found in this folder.</li>';
+                } else {
+                    list.innerHTML = tools.map(file => {
+                        // Create a readable title from the filename (e.g., "my-tool.html" -> "My Tool")
+                        const title = file.name
+                            .replace('.html', '')
+                            .replace(/-/g, ' ')
+                            .replace(/_/g, ' ')
+                            .replace(/\b\w/g, l => l.toUpperCase());
+                            
+                        return `<li><a href="${file.name}">📄 ${title}</a></li>`;
+                    }).join('');
+                }
+
+            } catch (error) {
+                console.error(error);
+                list.innerHTML = `<li>Error loading tools: ${error.message}<br><small>(If you just pushed this, wait a few minutes or check your repo settings)</small></li>`;
+            }
+        }
+
+        fetchTools();
+    </script>
+</body>
+</html>
