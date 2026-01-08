@@ -1,0 +1,271 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>New Tab</title>
+    <style>
+        :root {
+            --bg-color: #111;
+            --text-color: #eee;
+            --accent: #fff;
+        }
+
+        body, html {
+            margin: 0;
+            padding: 0;
+            height: 100%;
+            width: 100%;
+            background-color: var(--bg-color);
+            overflow: hidden;
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+        }
+
+        /* The Background Image */
+        #bg-image {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            object-fit: cover; /* Fills screen, cropping edges */
+            object-position: center;
+            opacity: 0;
+            transition: opacity 0.4s ease-out;
+            z-index: 1;
+        }
+
+        #bg-image.loaded {
+            opacity: 1;
+        }
+
+        /* Settings / API Key Modal */
+        #settings-modal {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            background: rgba(0, 0, 0, 0.85);
+            backdrop-filter: blur(10px);
+            padding: 2rem;
+            border-radius: 12px;
+            color: var(--text-color);
+            z-index: 10;
+            display: none; /* Hidden by default */
+            box-shadow: 0 10px 30px rgba(0,0,0,0.5);
+            max-width: 400px;
+            width: 90%;
+            text-align: center;
+        }
+
+        h2 { margin-top: 0; font-weight: 500; }
+        p { font-size: 0.9rem; color: #ccc; line-height: 1.5; }
+        
+        input {
+            width: 100%;
+            padding: 10px;
+            margin-top: 15px;
+            border-radius: 6px;
+            border: 1px solid #444;
+            background: #222;
+            color: white;
+            box-sizing: border-box;
+        }
+
+        button {
+            margin-top: 15px;
+            padding: 10px 20px;
+            background: var(--accent);
+            color: #000;
+            border: none;
+            border-radius: 6px;
+            cursor: pointer;
+            font-weight: 600;
+        }
+
+        button:hover { opacity: 0.9; }
+
+        /* Tiny settings toggle in bottom right */
+        #gear-btn {
+            position: absolute;
+            bottom: 20px;
+            right: 20px;
+            z-index: 20;
+            opacity: 0.3;
+            cursor: pointer;
+            color: white;
+            font-size: 20px;
+            background: none;
+            border: none;
+            transition: opacity 0.2s;
+        }
+        #gear-btn:hover { opacity: 1; }
+
+    </style>
+</head>
+<body>
+
+    <!-- Main Image -->
+    <img id="bg-image" alt="New Tab Background">
+
+    <!-- Settings Toggle -->
+    <button id="gear-btn" onclick="showSettings()">⚙</button>
+
+    <!-- Setup Modal -->
+    <div id="settings-modal">
+        <h2>Unsplash Setup</h2>
+        <p>Enter your Unsplash Access Key to enable 4K wallpapers.</p>
+        <input type="password" id="api-key-input" placeholder="Paste Access Key here...">
+        <button onclick="saveKey()">Save & Load</button>
+        <p style="font-size: 0.7rem; color: #777; margin-top: 15px;">
+            Key is stored locally in your browser. <br>
+            <a href="https://unsplash.com/developers" target="_blank" style="color:#999;">Get a key here</a>
+        </p>
+    </div>
+
+    <script>
+        // --- CONFIG ---
+        const COLLECTION_ID = '317099';
+        const DB_NAME = "NewTabDB";
+        const STORE_NAME = "wallpaper_store";
+        const IMAGE_KEY = "cached_wallpaper"; // Constant key ensures we overwrite old images (auto-cleanup)
+        
+        const imgElement = document.getElementById('bg-image');
+        const modal = document.getElementById('settings-modal');
+        const input = document.getElementById('api-key-input');
+
+        // --- INIT ---
+        (async function init() {
+            const apiKey = localStorage.getItem("unsplash_access_key");
+
+            if (!apiKey) {
+                // First run: Show settings
+                showSettings();
+                return;
+            }
+
+            try {
+                const db = await openDB();
+                
+                // 1. Load Cache (Instant)
+                const cachedBlob = await getFromDB(db, IMAGE_KEY);
+                if (cachedBlob) {
+                    renderImage(cachedBlob);
+                    console.log("Displayed cached image. Fetching next in background...");
+                    await fetchNextImage(apiKey, db);
+                } else {
+                    // Cold start
+                    console.log("No cache. Fetching live...");
+                    await fetchNextImage(apiKey, db, true);
+                }
+            } catch (err) {
+                console.error("Initialization error:", err);
+            }
+        })();
+
+        // --- CORE LOGIC ---
+
+        async function fetchNextImage(apiKey, db, renderNow = false) {
+            try {
+                // 1. Get Metadata (JSON)
+                const apiUrl = `https://api.unsplash.com/photos/random?collections=${COLLECTION_ID}&orientation=landscape`;
+                const jsonResp = await fetch(apiUrl, {
+                    headers: { 'Authorization': `Client-ID ${apiKey}` }
+                });
+
+                if (!jsonResp.ok) {
+                    if (jsonResp.status === 401) {
+                        alert("Invalid API Key. Please update it.");
+                        showSettings();
+                        return;
+                    }
+                    throw new Error(`API Error: ${jsonResp.status}`);
+                }
+
+                const data = await jsonResp.json();
+                
+                // 2. Construct 4K URL
+                // raw URL allows us to append Imgix params for precise control
+                // q=80: slightly compressed 4K is better than uncompressed for loading speed
+                const imageUrl = `${data.urls.raw}&w=3840&q=80&fit=clip&dpr=1`;
+
+                // 3. Download Binary
+                const imgResp = await fetch(imageUrl);
+                const blob = await imgResp.blob();
+
+                // 4. Save to IndexedDB (Overwrites previous image automatically)
+                await saveToDB(db, IMAGE_KEY, blob);
+                console.log("Background fetch complete & saved.");
+
+                if (renderNow) {
+                    renderImage(blob);
+                }
+
+            } catch (e) {
+                console.error("Fetch failed:", e);
+            }
+        }
+
+        function renderImage(blob) {
+            const objectURL = URL.createObjectURL(blob);
+            imgElement.src = objectURL;
+            imgElement.onload = () => {
+                imgElement.classList.add('loaded');
+            };
+        }
+
+        // --- SETTINGS UI ---
+
+        function showSettings() {
+            modal.style.display = 'block';
+            input.value = localStorage.getItem("unsplash_access_key") || "";
+        }
+
+        function saveKey() {
+            const key = input.value.trim();
+            if (key) {
+                localStorage.setItem("unsplash_access_key", key);
+                modal.style.display = 'none';
+                location.reload(); // Reload to trigger logic
+            }
+        }
+
+        // --- INDEXED DB BOILERPLATE ---
+
+        function openDB() {
+            return new Promise((resolve, reject) => {
+                const request = indexedDB.open(DB_NAME, 1);
+                request.onupgradeneeded = (e) => {
+                    const db = e.target.result;
+                    if (!db.objectStoreNames.contains(STORE_NAME)) {
+                        db.createObjectStore(STORE_NAME);
+                    }
+                };
+                request.onsuccess = (e) => resolve(e.target.result);
+                request.onerror = (e) => reject(e.target.error);
+            });
+        }
+
+        function getFromDB(db, key) {
+            return new Promise((resolve, reject) => {
+                const tx = db.transaction(STORE_NAME, 'readonly');
+                const store = tx.objectStore(STORE_NAME);
+                const request = store.get(key);
+                request.onsuccess = () => resolve(request.result);
+                request.onerror = () => reject(request.error);
+            });
+        }
+
+        function saveToDB(db, key, val) {
+            return new Promise((resolve, reject) => {
+                const tx = db.transaction(STORE_NAME, 'readwrite');
+                const store = tx.objectStore(STORE_NAME);
+                // .put() adds or updates. This ensures we don't pile up old images.
+                const request = store.put(val, key); 
+                request.onsuccess = () => resolve();
+                request.onerror = () => reject(request.error);
+            });
+        }
+    </script>
+</body>
+</html>
